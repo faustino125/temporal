@@ -1,0 +1,141 @@
+resources:
+  jobs:
+    de_data_integration:
+      name: de_data_integration
+      schedule:
+        quartz_cron_expression: 58 0 4 3 * ?
+        timezone_id: America/Belize
+        pause_status: PAUSED
+      max_concurrent_runs: 4
+      tasks:
+        - task_key: data_integration_flow
+          depends_on:
+            - task_key: full_load_flow
+          python_wheel_task:
+            package_name: data_engineering
+            entry_point: data_flow
+            parameters:
+              - --env
+              - "{{job.parameters.env}}"
+              - --workflow
+              - "{{job.parameters.workflow}}"
+              - --flow
+              - data_integration_flow
+              - --node
+              - "{{job.parameters.nodes}}"
+              - --start_dt
+              - "{{job.parameters.start_dt}}"
+              - --end_dt
+              - "{{job.parameters.end_dt}}"
+              - --overwrite_strategy
+              - "{{job.parameters.overwrite_strategy}}"
+              - --sanity_check
+              - "{{job.parameters.sanity_check}}"
+          job_cluster_key: job_cluster_integration
+          libraries:
+            - pypi:
+                package: data-engineering
+        - task_key: full_load_flow
+          python_wheel_task:
+            package_name: data_engineering
+            entry_point: data_flow
+            parameters:
+              - --env
+              - "{{job.parameters.env}}"
+              - --workflow
+              - "{{job.parameters.workflow}}"
+              - --flow
+              - full_load_flow
+              - --node
+              - "{{job.parameters.fload_nodes}}"
+              - --start_dt
+              - "{{job.parameters.start_dt}}"
+              - --end_dt
+              - "{{job.parameters.end_dt}}"
+              - --overwrite_strategy
+              - "{{job.parameters.overwrite_strategy}}"
+              - --sanity_check
+              - "{{job.parameters.sanity_check}}"
+          job_cluster_key: job_cluster_integration
+          libraries:
+            - pypi:
+                package: data-engineering
+        - task_key: qa_flow
+          depends_on:
+            - task_key: data_integration_flow
+          python_wheel_task:
+            package_name: data_engineering
+            entry_point: data_flow
+            parameters:
+              - --env
+              - "{{job.parameters.env}}"
+              - --workflow
+              - "{{job.parameters.workflow}}"
+              - --flow
+              - qa_flow
+              - --nodes
+              - mc_data_quality.check_date_flow
+              - --start_dt
+              - ""
+              - --end_dt
+              - ""
+              - --overwrite_strategy
+              - replaceWhere
+          job_cluster_key: job_cluster_integration
+          libraries:
+            - pypi:
+                package: data-engineering
+      job_clusters:
+        - job_cluster_key: job_cluster_integration
+          new_cluster:
+            cluster_name: ""
+            spark_version: 14.3.x-scala2.12
+            spark_conf:
+              spark.devops_org: "{{secrets/DEV/AZ_DEVOPS_ORG}}"
+              spark.devops_feed: "{{secrets/DEV/AZ_DEVOPS_FEED}}"
+              spark.devops_token: "{{secrets/DEV/AZ_DEVOPS_TOKEN}}"
+              spark.devops_user: "{{secrets/DEV/AZ_DEVOPS_USER}}"
+              spark.devops_project: "{{secrets/DEV/AZ_DEVOPS_PROJ_ID}}"
+            azure_attributes:
+              first_on_demand: 1
+              availability: ON_DEMAND_AZURE
+              spot_bid_max_price: -1
+            node_type_id: Standard_D8ads_v5
+            driver_node_type_id: Standard_D8ads_v5
+            custom_tags:
+              usage: integration
+            spark_env_vars:
+              AZ_DEVOPS_USER: "{{secrets/DEV/AZ_DEVOPS_USER}}"
+              AZ_DEVOPS_FEED: "{{secrets/DEV/AZ_DEVOPS_FEED}}"
+              AZ_DEVOPS_TOKEN: "{{secrets/DEV/AZ_DEVOPS_TOKEN}}"
+              AZ_DEVOPS_ORG: "{{secrets/DEV/AZ_DEVOPS_ORG}}"
+              AZ_DEVOPS_PROJ_ID: "{{secrets/DEV/AZ_DEVOPS_PROJ_ID}}"
+            enable_elastic_disk: true
+            init_scripts:
+              - volumes:
+                  destination: /Volumes/bi_dev_de/default/infra-setup-de/add_artifacts_url_dev_sec.sh
+            data_security_mode: SINGLE_USER
+            runtime_engine: STANDARD
+            num_workers: 3
+      tags:
+        env: dev
+        layer: data_integration
+      queue:
+        enabled: true
+      parameters:
+        - name: end_dt
+          default: 2025-04-30
+        - name: env
+          default: dev
+        - name: nodes
+          default: master_customer.master_customer_flow
+        - name: start_dt
+          default: 2025-01-01
+        - name: workflow
+          default: data_integration
+        - name: overwrite_strategy
+          default: replaceWhere
+        - name: fload_nodes
+          default: mc_equifax_loan.mc_eql_income_flow
+        - name: sanity_check
+          default: "true"

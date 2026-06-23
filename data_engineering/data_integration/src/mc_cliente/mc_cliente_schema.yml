@@ -1,0 +1,10 @@
+fields:
+  _observ_end_dt: "Fecha correspondiente al último día del mes"
+  id_cliente: "Código de cliente"
+  mc_cli_activos_corrientes_sum_val: "Balances unificados de cuentas monetarias y de ahorro mas el disponible en tarjeta de credito del mes"
+  mc_cli_pasivos_corrientes_sum_val: "Unificación de cuotas de prestamo y deuda de mes de tarjeta de crédito"
+  mc_cli_razon_corriente_val: "activos corrientes/ pasivos corrientes"
+  mc_cli_balance_total_sum_val: "Suma saldos de cuenta monetarias y ahorros"
+  mc_cli_razon_balance_ingresos_val: "Suma ingresos mensuales/Suma del balance total"
+  _particion: "Año y mes del período"
+  _observ_start_dt: "Fecha correspondiente al primer día del mes"

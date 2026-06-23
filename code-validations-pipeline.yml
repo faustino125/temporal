@@ -1,0 +1,56 @@
+# Code checks pipeline
+
+#Uses flake, pylint, isort and grep to do validations inside the project
+
+trigger:
+  branches:
+    include:
+      - "develop"
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+- checkout: self
+- script: |
+    echo Installing dependencies...
+    python -m pip install --upgrade pip
+    pip install flake8==7.1.1 pylint==v3.3.1 isort==5.13.2 black==23.7.0 prefect==2.20.4 databricks-connect==14.3.3
+  displayName: 'Installing code validation libraries'
+
+
+# Checks for consistent code formatting
+- script: |
+    echo Executing black...
+    black --check .
+  displayName: 'Checking Black formatting'
+
+# Checks for import order and standard
+- script: |
+    echo Executing isort...
+     isort --profile black --check-only .
+  displayName: 'Checking isort'
+
+ # Checks for coding error, style discrepancies or suspicious code patterns.
+- script: |
+    echo Executing flake8...
+    flake8 . --max-line-length=88 --extend-ignore=E203,W503
+  displayName: 'Checking flake8'
+
+ # Checks for problematic coding patterns and code quality
+- script: |
+    echo Executing pylint...
+    pylint --errors-only --disable=E0401 $(System.DefaultWorkingDirectory)
+  displayName: 'Checking pylint'
+
+# Checks for trailing whitespaces in code lines
+- bash: |
+    echo Executing trailing whitespace check...
+    ! grep -rI '\\s$' $(System.DefaultWorkingDirectory)/*.py
+  displayName: 'Checking for trailing whitespace check'
+
+# Checks for merge conflicts inside the code
+- bash: |
+    echo Executing absence of merge conflicts check...
+    ! grep -rI '<<<<<<< HEAD' $(System.DefaultWorkingDirectory)/*.py
+  displayName: 'Checking for absence of merge conflicts'

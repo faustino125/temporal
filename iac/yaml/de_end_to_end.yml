@@ -1,0 +1,52 @@
+resources:
+  jobs:
+    de_end_to_end:
+      name: de_end_to_end
+      schedule:
+        quartz_cron_expression: 58 30 8 3 * ?
+        timezone_id: America/Belize
+        pause_status: UNPAUSED
+      tasks:
+        - task_key: catalog_flow
+          run_job_task:
+            job_id: 664179241117384
+            job_parameters:
+              nodes: "{{job.parameters.catalog_nodes}}"
+        - task_key: cleaning_flow
+          depends_on:
+            - task_key: catalog_flow
+          run_job_task:
+            job_id: 1059352601077166
+        - task_key: transformation_flow
+          depends_on:
+            - task_key: cleaning_flow
+          run_if: AT_LEAST_ONE_FAILED
+          run_job_task:
+            job_id: 736672300107627
+        - task_key: integration_flow
+          depends_on:
+            - task_key: transformation_flow
+          run_if: AT_LEAST_ONE_FAILED
+          run_job_task:
+            job_id: 952401794571095
+      tags:
+        env: dev
+      queue:
+        enabled: true
+      parameters:
+        - name: catalog_nodes
+          default: ""
+        - name: end_dt
+          default: ""
+        - name: env
+          default: dev
+        - name: integration_nodes
+          default: ""
+        - name: snapshot_nodes
+          default: ""
+        - name: start_dt
+          default: ""
+        - name: transactional_nodes
+          default: ""
+        - name: transformation_nodes
+          default: ""

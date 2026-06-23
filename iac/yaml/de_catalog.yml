@@ -1,0 +1,87 @@
+resources:
+  jobs:
+    de_catalog:
+      name: de_catalog
+      schedule:
+        quartz_cron_expression: 58 0 4 3 * ?
+        timezone_id: America/Belize
+        pause_status: PAUSED
+      max_concurrent_runs: 4
+      tasks:
+        - task_key: catalog_cleaning
+          python_wheel_task:
+            package_name: data_engineering
+            entry_point: data_flow
+            parameters:
+              - --env
+              - "{{job.parameters.env}}"
+              - --workflow
+              - "{{job.parameters.workflow}}"
+              - --flow
+              - catalog_flow
+              - --nodes
+              - "{{job.parameters.nodes}}"
+              - --start_dt
+              - "{{job.parameters.start_dt}}"
+              - --end_dt
+              - "{{job.parameters.end_dt}}"
+              - --overwrite_strategy
+              - "{{job.parameters.overwrite_strategy}}"
+              - --sanity_check
+              - "{{job.parameters.sanity_check}}"
+          job_cluster_key: job_cluster_catalog
+          libraries:
+            - pypi:
+                package: data-engineering
+      job_clusters:
+        - job_cluster_key: job_cluster_catalog
+          new_cluster:
+            cluster_name: ""
+            spark_version: 14.3.x-scala2.12
+            spark_conf:
+              spark.devops_org: "{{secrets/DEV/AZ_DEVOPS_ORG}}"
+              spark.devops_feed: "{{secrets/DEV/AZ_DEVOPS_FEED}}"
+              spark.devops_token: "{{secrets/DEV/AZ_DEVOPS_TOKEN}}"
+              spark.devops_user: "{{secrets/DEV/AZ_DEVOPS_USER}}"
+              spark.devops_project: "{{secrets/DEV/AZ_DEVOPS_PROJ_ID}}"
+            azure_attributes:
+              first_on_demand: 1
+              availability: ON_DEMAND_AZURE
+              spot_bid_max_price: -1
+            node_type_id: Standard_D8ads_v5
+            driver_node_type_id: Standard_D8ads_v5
+            custom_tags:
+              usage: catalog_cleaning
+            spark_env_vars:
+              AZ_DEVOPS_USER: "{{secrets/DEV/AZ_DEVOPS_USER}}"
+              AZ_DEVOPS_FEED: "{{secrets/DEV/AZ_DEVOPS_FEED}}"
+              AZ_DEVOPS_TOKEN: "{{secrets/DEV/AZ_DEVOPS_TOKEN}}"
+              AZ_DEVOPS_ORG: "{{secrets/DEV/AZ_DEVOPS_ORG}}"
+              AZ_DEVOPS_PROJ_ID: "{{secrets/DEV/AZ_DEVOPS_PROJ_ID}}"
+            enable_elastic_disk: true
+            init_scripts:
+              - volumes:
+                  destination: /Volumes/bi_dev_de/default/infra-setup-de/add_artifacts_url_dev_sec.sh
+            data_security_mode: SINGLE_USER
+            runtime_engine: STANDARD
+            num_workers: 3
+      tags:
+        env: dev
+        layer: data_cleaning
+      queue:
+        enabled: true
+      parameters:
+        - name: env
+          default: dev
+        - name: nodes
+          default: credit_card.cc_categories_flow,autoriza.mcc_aggrupation_flow,physical_channel.qflow_branches_flow
+        - name: workflow
+          default: data_cleaning
+        - name: start_dt
+          default: 2025-01-01
+        - name: end_dt
+          default: 2025-04-30
+        - name: overwrite_strategy
+          default: replaceWhere
+        - name: sanity_check
+          default: "true"

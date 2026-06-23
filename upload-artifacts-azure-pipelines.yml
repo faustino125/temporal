@@ -1,0 +1,69 @@
+trigger:
+  branches:
+    include:
+      - "develop"
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  - name: pythonVersion
+    value: '3.x'
+  - name: artifactName
+    value: 'wheel'
+  - group: Utils
+  - group: Dev
+
+stages:
+- stage: Build
+  displayName: "Build Package"
+  jobs:
+  - job: CI_Build
+    steps:
+    - script: echo "Building Package..."
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: $(pythonVersion)
+        addToPath: true
+      displayName: 'Install Python'
+
+    - script: |
+        python -m pip install --upgrade pip setuptools wheel
+        python setup.py sdist bdist_wheel
+      displayName: 'Build Wheel'
+
+    - task: PublishPipelineArtifact@1
+      inputs:
+        targetPath: 'dist'
+        artifact: $(artifactName)
+        publishLocation: 'pipeline'
+      displayName: 'Publish Artifact'
+
+- stage: Dev
+  displayName: "Publish DEV"
+  dependsOn: Build
+  condition: and(succeeded(), eq(variables['build.sourceBranch'], 'refs/heads/develop'))
+  jobs:
+  - job: CI_DEV
+    steps:
+    - script: echo "Publish to DEV Feed..."
+
+    - task: DownloadPipelineArtifact@2
+      inputs:
+        artifactName: $(artifactName)
+        targetPath: '$(Pipeline.Workspace)/downloaded_wheel'
+      displayName: 'Download Artifact'
+
+    - script: |
+        pip install twine==6.1.0
+      displayName: "Install Publishing Tools"
+
+    - task: TwineAuthenticate@1
+      inputs:
+        artifactFeed: '$(prefect_project)/$(dev_feed)'
+      displayName: "Authenticate to Feed"
+
+    - script: |
+        echo "Publishing Wheel to DEV Feed..."
+        twine upload --skip-existing -r $(dev_feed) --config-file $(PYPIRC_PATH) $(Pipeline.Workspace)/downloaded_wheel/*.whl
+      displayName: "Publish Wheel to Azure Artifacts"

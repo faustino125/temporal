@@ -1,0 +1,29 @@
+#!/bin/bash
+
+LAYER=$1
+MODULE=$2
+
+BASE_DIRS=("data_cleaning" "data_transformation" "data_integration" "core")
+
+if [ -n "$LAYER" ]; then
+  BASE_DIRS=("$LAYER")
+fi
+
+for BASE_DIR in "${BASE_DIRS[@]}"; do
+  if [ "$BASE_DIR" == "core" ]; then
+    pdoc3 --pdf "data_engineering.$BASE_DIR" > "./data_engineering/$BASE_DIR/$BASE_DIR.md"
+    echo "DOCUMENTATION GENERATED FOR: $BASE_DIR layer"
+    continue
+  fi
+  for MODULE_PATH in $(find "./data_engineering/$BASE_DIR/src" -mindepth 1 -maxdepth 1 -type d); do
+    MODULE_NAME=$(basename "$MODULE_PATH")
+
+    if [ -n "$MODULE" ] && [ "$MODULE_NAME" != "$MODULE" ]; then
+      continue
+    fi
+
+    pdoc3 --pdf "data_engineering.$BASE_DIR.src.$MODULE_NAME" > "./data_engineering/$BASE_DIR/src/$MODULE_NAME/$MODULE_NAME.md"
+    echo "DOCUMENTATION GENERATED FOR: $MODULE_NAME IN THE : $BASE_DIR layer"
+  done
+done
+pre-commit run --all-files

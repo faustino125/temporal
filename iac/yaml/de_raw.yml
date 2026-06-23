@@ -1,0 +1,83 @@
+resources:
+  jobs:
+    de_raw_check:
+      name: de_raw_check
+      trigger:
+        pause_status: PAUSED
+        file_arrival:
+          url: abfss://guatemala@datalakedatacr.dfs.core.windows.net/control_migracion_datos_crudos/event_triggers/
+          min_time_between_triggers_seconds: 0
+      tasks:
+        - task_key: raw_check
+          python_wheel_task:
+            package_name: data_engineering
+            entry_point: data_flow
+            parameters:
+              - --env
+              - "{{job.parameters.env}}"
+              - --workflow
+              - "{{job.parameters.workflow}}"
+              - --flow
+              - raw_data_flow
+              - --nodes
+              - "{{job.parameters.nodes}}"
+              - --start_dt
+              - "{{job.parameters.start_dt}}"
+              - --end_dt
+              - "{{job.parameters.end_dt}}"
+              - --overwrite_strategy
+              - "{{job.parameters.overwrite_strategy}}"
+          job_cluster_key: job_cluster_raw
+          libraries:
+            - pypi:
+                package: data-engineering
+      job_clusters:
+        - job_cluster_key: job_cluster_raw
+          new_cluster:
+            cluster_name: ""
+            spark_version: 14.3.x-scala2.12
+            spark_conf:
+              spark.devops_org: "{{secrets/DEV/AZ_DEVOPS_ORG}}"
+              spark.devops_feed: "{{secrets/DEV/AZ_DEVOPS_FEED}}"
+              spark.devops_token: "{{secrets/DEV/AZ_DEVOPS_TOKEN}}"
+              spark.devops_user: "{{secrets/DEV/AZ_DEVOPS_USER}}"
+              spark.devops_project: "{{secrets/DEV/AZ_DEVOPS_PROJ_ID}}"
+            azure_attributes:
+              first_on_demand: 1
+              availability: ON_DEMAND_AZURE
+              spot_bid_max_price: -1
+            node_type_id: Standard_D8ads_v5
+            driver_node_type_id: Standard_D8ads_v5
+            custom_tags:
+              usage: raw_check
+            spark_env_vars:
+              AZ_DEVOPS_USER: "{{secrets/DEV/AZ_DEVOPS_USER}}"
+              AZ_DEVOPS_FEED: "{{secrets/DEV/AZ_DEVOPS_FEED}}"
+              AZ_DEVOPS_TOKEN: "{{secrets/DEV/AZ_DEVOPS_TOKEN}}"
+              AZ_DEVOPS_ORG: "{{secrets/DEV/AZ_DEVOPS_ORG}}"
+              AZ_DEVOPS_PROJ_ID: "{{secrets/DEV/AZ_DEVOPS_PROJ_ID}}"
+            enable_elastic_disk: true
+            init_scripts:
+              - volumes:
+                  destination: /Volumes/bi_dev_de/default/infra-setup-de/add_artifacts_url_dev_sec.sh
+            data_security_mode: SINGLE_USER
+            runtime_engine: STANDARD
+            num_workers: 3
+      tags:
+        env: dev
+        layer: raw_check
+      queue:
+        enabled: true
+      parameters:
+        - name: end_dt
+          default: ""
+        - name: env
+          default: dev
+        - name: nodes
+          default: missing_dates.missing_raw_data_flow
+        - name: overwrite_strategy
+          default: replaceWhere
+        - name: start_dt
+          default: ""
+        - name: workflow
+          default: raw_data
