@@ -76,7 +76,15 @@ def to_dataframe(
     now_utc_6 = datetime.now(_TIMEZONE_UTC_6)
     now = now_utc_6.strftime("%Y-%m-%d %H:%M:%S")
     observ_end_dt = os.getenv(ENV_VAR_END_DATE, now_utc_6.strftime("%Y-%m-%d"))
-    end_dt_date = datetime.strptime(observ_end_dt, "%Y-%m-%d").date()
+    try:
+        end_dt_date = datetime.strptime(observ_end_dt, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        logger.warning(
+            f"Invalid '{ENV_VAR_END_DATE}' value '{observ_end_dt}' "
+            f"(expected YYYY-MM-DD). Falling back to current date."
+        )
+        end_dt_date = now_utc_6.date()
+        observ_end_dt = end_dt_date.strftime("%Y-%m-%d")
     observ_start_dt = end_dt_date.replace(day=1)
 
     records_for_df = []
@@ -109,6 +117,9 @@ def to_dataframe(
 class ConfigLoader:
     """Centralized YAML configuration loader with standardized error handling."""
 
+    # Process-wide cache keyed by file path. Assumes config files do not change
+    # during a run (true for short-lived batch jobs); a long-lived process would
+    # serve stale config. Invalidate by restarting the process.
     _yaml_cache: Dict[str, Any] = {}
 
     @staticmethod
@@ -168,6 +179,9 @@ class ConfigLoader:
 class EnvironmentConfig:
     """Unified access to environment variables with caching and validation."""
 
+    # Process-wide cache for resolved environment/company/catalog/root values.
+    # Valid for short-lived batch jobs; use clear_cache() (or restart the
+    # process) to invalidate, e.g. in tests that mutate env vars.
     _cache: Dict[str, str] = {}
     ENV_VAR_ENVIRONMENT = "env"
     DEFAULT_ENVIRONMENT = "dev"
@@ -242,6 +256,13 @@ class EnvironmentConfig:
     @classmethod
     def get_catalog_name(cls, p_root_dir: Optional[str] = None) -> str:
         """Get Databricks catalog name following project conventions.
+
+        The catalog is ``{company}_{env}_de``, but any environment other than
+        ``prod``/``dev`` is collapsed to ``sandbox`` (e.g. ``preprod`` →
+        ``{company}_sandbox_de``). Note this reads the ``env`` variable, whereas
+        ``save_data_flow`` builds its write catalog from ``new_env``; if those
+        differ, the quality gate may read from a different catalog than the one
+        results are written to. Value is cached for the process.
 
         Args:
             p_root_dir: Root directory path (auto-detected if None)

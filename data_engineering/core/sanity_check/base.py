@@ -90,19 +90,22 @@ class BaseValidator(ABC):
         self._column_cache[p_col_name] = actual
         return actual
 
-    def _get_severity(
-        self, default: QualitySeverity = QualitySeverity.MEDIUM
+    @staticmethod
+    def coerce_severity(
+        sev: Any, default: QualitySeverity = QualitySeverity.MEDIUM
     ) -> QualitySeverity:
-        """Resolve severity from config or return default with strict validation.
+        """Coerce an arbitrary value into a QualitySeverity with strict validation.
 
         Args:
-            default: Default severity if not found in config
+            sev: Raw severity value (None, str or QualitySeverity)
+            default: Default severity if value is None
 
         Returns:
-            QualitySeverity enum matching configured value.
-        """
-        sev = self.config.get("severity", default)
+            QualitySeverity enum matching the configured value.
 
+        Raises:
+            ValueError: If the value is a non-empty, unrecognized severity.
+        """
         if sev is None:
             return default
 
@@ -123,6 +126,19 @@ class BaseValidator(ABC):
             ) from None
 
         raise ValueError(f"QualitySeverity enum, got {type(sev).__name__}")
+
+    def _get_severity(
+        self, default: QualitySeverity = QualitySeverity.MEDIUM
+    ) -> QualitySeverity:
+        """Resolve severity from config or return default with strict validation.
+
+        Args:
+            default: Default severity if not found in config
+
+        Returns:
+            QualitySeverity enum matching configured value.
+        """
+        return self.coerce_severity(self.config.get("severity", default), default)
 
     def _get_config_value(self, keys: List[str], default: Any = None) -> Any:
         """Get configuration value by testing multiple possible keys in order.

@@ -25,6 +25,8 @@ The core exposes reusable validators that are activated through each layer's YAM
 | `dimensional` | `StandardDimensionalValidator` | Verifies that values belong to the configured allowed set. |
 | `consistency` | `StandardConsistencyValidator` | Evaluates SQL-like business rules. |
 
+> **Consistency rules and NULLs:** By default a row whose rule condition evaluates to `NULL` (for example a `NULL` operand in `amount > 0`) is **not** counted as a failure, following standard SQL three-valued logic. Set `treat_null_as_fail: true` on an individual rule to count such rows as violations.
+
 ## Execution Model
 
 The module follows a preventive model so that quality issues are caught as early as possible without adding unnecessary overhead.

@@ -1,1 +1,2 @@
 recursive-include data_engineering/env *.yml
+recursive-include data_engineering *.yml

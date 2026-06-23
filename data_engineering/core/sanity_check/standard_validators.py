@@ -115,7 +115,14 @@ class StandardNullValuesValidator(BaseValidator):
             base_columns = [base_columns]
 
         merged_thresholds = {col: 0 for col in base_columns}
-        merged_thresholds.update(null_thresholds)
+        if isinstance(null_thresholds, dict):
+            merged_thresholds.update(null_thresholds)
+        elif null_thresholds:
+            logger.warning(
+                f"Ignoring invalid null_thresholds for '{p_dataset_name}': "
+                f"expected a mapping of column→percent, got "
+                f"{type(null_thresholds).__name__}."
+            )
 
         if not merged_thresholds:
             return to_dataframe(self.spark, [])
@@ -218,6 +225,15 @@ class StandardDimensionalValidator(BaseValidator):
         if not dimensions and not value_checks:
             return to_dataframe(self.spark, [])
 
+        validator_allow_null = bool(self.config.get("allow_null", False))
+
+        def _invalid_condition(p_col: str, p_allowed: list, p_allow_null: bool):
+            """Build the out-of-domain condition, optionally treating NULL as valid."""
+            out_of_domain = ~f.col(p_col).isin(p_allowed)
+            if p_allow_null:
+                return f.col(p_col).isNotNull() & out_of_domain
+            return f.col(p_col).isNull() | out_of_domain
+
         records = []
         agg_exprs = []
         check_map = {}
@@ -240,8 +256,8 @@ class StandardDimensionalValidator(BaseValidator):
                 continue
 
             alias = f"inv_{actual_col}"
-            invalid_cond = (f.col(actual_col).isNull()) | (
-                ~f.col(actual_col).isin(allowed_vals)
+            invalid_cond = _invalid_condition(
+                actual_col, allowed_vals, validator_allow_null
             )
             agg_exprs.append(f.count(f.when(invalid_cond, 1)).alias(alias))
             check_map[alias] = {"column": actual_col, "type": "dimensional"}
@@ -268,10 +284,9 @@ class StandardDimensionalValidator(BaseValidator):
             if actual_col.lower() in [k.lower() for k in dimensions.keys()]:
                 continue
 
+            check_allow_null = bool(check.get("allow_null", validator_allow_null))
             alias = f"vc_{i}_{actual_col}"
-            invalid_cond = (f.col(actual_col).isNull()) | (
-                ~f.col(actual_col).isin(valid_list)
-            )
+            invalid_cond = _invalid_condition(actual_col, valid_list, check_allow_null)
             agg_exprs.append(f.count(f.when(invalid_cond, 1)).alias(alias))
             check_map[alias] = {"column": actual_col, "type": "dimensional"}
 
@@ -344,18 +359,18 @@ class StandardConsistencyValidator(BaseValidator):
                 )
                 continue
 
-            severity_str = rule.get("severity")
-            severity = (
-                QualitySeverity.__members__.get(
-                    severity_str.upper(), QualitySeverity.MEDIUM
-                )
-                if severity_str
-                else self._get_severity(QualitySeverity.MEDIUM)
+            severity = self.coerce_severity(
+                rule.get("severity"), self._get_severity(QualitySeverity.MEDIUM)
             )
+
+            treat_null_as_fail = bool(rule.get("treat_null_as_fail", False))
 
             alias = f"invalid_count_{idx}"
             try:
-                agg_exprs.append(f.count(f.when(~f.expr(condition), 1)).alias(alias))
+                violated = ~f.expr(condition)
+                if treat_null_as_fail:
+                    violated = f.coalesce(violated, f.lit(True))
+                agg_exprs.append(f.count(f.when(violated, 1)).alias(alias))
                 rule_metadata.append(
                     {
                         "idx": idx,

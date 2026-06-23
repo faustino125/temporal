@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import threading
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from prefect import flow, get_run_logger, task  # type: ignore
@@ -16,7 +17,6 @@ from data_engineering.core.sanity_check.engine import (
 from data_engineering.core.sanity_check.utils import DEFAULT_LAYER, ConfigLoader
 from data_engineering.core.utils import (
     import_flow_module,
-    load_yaml_file,
     send_message_teams,
 )
 
@@ -30,6 +30,7 @@ _UPSTREAM_MAP = {
 _PRE_SAVE_MONTH_THRESHOLD = 3
 FLOW_NAME_SUFFIX = "_flow"
 _DEPENDENCY_CACHE: Dict[str, Optional[Set[str]]] = {}
+_ENV_MUTATION_LOCK = threading.Lock()
 
 
 def execute_sanity_check(
@@ -141,45 +142,6 @@ def prepare_flow_sanity_checks(
         )
 
 
-def _process_validation_results(
-    p_all_results_dfs: List[DataFrame],
-    p_stop_summaries: List[Dict],
-    p_file_name: str,
-    p_month_ranges: List[Tuple[str, str]],
-    p_data_subfolder: str,
-) -> None:
-    """Process and handle validation results and summaries.
-
-    Args:
-        p_all_results_dfs: List of validation result DataFrames to consolidate.
-        p_stop_summaries: List of summaries with STOP decision.
-        p_file_name: Dataset name being validated.
-        p_month_ranges: List of month ranges processed.
-        p_data_subfolder: Layer name (e.g., 'data_cleaning').
-
-    Raises:
-        RuntimeError: When validation detects CRITICAL failures.
-    """
-    if p_all_results_dfs:
-        validation_results(
-            LayerUtils.consolidate_results(p_all_results_dfs), layer=p_data_subfolder
-        )
-    else:
-        logger.info(
-            f"[PRE-SAVE SC] No validation failures for '{p_file_name}' "
-            f"across {len(p_month_ranges)} month(s). Proceeding."
-        )
-
-    if p_stop_summaries:
-        total_critical = sum(s.get("critical_failures", 0) for s in p_stop_summaries)
-        failed_months = [s.get("month", "unknown") for s in p_stop_summaries]
-        raise RuntimeError(
-            f"Data persistence blocked: pre-save sanity check failed for "
-            f"'{p_file_name}' — {total_critical} CRITICAL failure(s) in "
-            f"months: {', '.join(failed_months)}. Staged data will be discarded."
-        )
-
-
 def pre_save_quality_checks(
     p_df: DataFrame,
     p_file_name: str,
@@ -205,13 +167,7 @@ def pre_save_quality_checks(
     if p_data_subfolder == "raw_data":
         return
 
-    from data_engineering.core.sanity_check.utils import EnvironmentConfig
-
-    prefix_path = os.path.join(
-        EnvironmentConfig.get_root_dir(), "env", "base", "prefixes.yml"
-    )
-    prefix = load_yaml_file(prefix_path).get(os.getenv("output_domain"), {})
-    table_name = prefix + "_" + p_file_name
+    _, table_name = _get_prefixed_dataset(os.getenv("output_domain"), p_file_name)
     start_date = os.getenv("start_dt")
     end_date = os.getenv("end_dt")
     load_config = LayerUtils.create_layer_config_loader(p_data_subfolder)
@@ -223,6 +179,12 @@ def pre_save_quality_checks(
             month_ranges = LayerUtils._resolve_month_ranges(start_date, end_date)
             engine = QualityEngine()
             stop_summaries = []
+
+            def _pre_save_validate(p_name, p_month_df, p_cfg):
+                return engine.validate(
+                    p_month_df, p_name, p_cfg, p_layer=p_data_subfolder
+                )
+
             date_col_to_use = p_date_col or LayerUtils._resolve_date_col(config, {})
             required_cols = LayerUtils._extract_columns_for_caching(
                 config, date_col_to_use, p_df.columns
@@ -237,10 +199,21 @@ def pre_save_quality_checks(
             else:
                 validation_df = p_df
 
-            try:
+            if not p_date_col:
+                full_df = validation_df.persist(StorageLevel.MEMORY_AND_DISK)
+                try:
+                    results_df, summary = engine.validate(
+                        full_df, table_name, config, p_layer=p_data_subfolder
+                    )
+                    if results_df is not None and not df_is_empty(results_df):
+                        validation_results(results_df, layer=p_data_subfolder)
+                    if summary.get("decision") == "STOP":
+                        summary["month"] = end_date or "ALL"
+                        stop_summaries.append(summary)
+                finally:
+                    full_df.unpersist()
+            else:
                 yearly_chunks = LayerUtils._group_month_ranges_by_year(month_ranges)
-                stop_summaries = []
-                batch_results = []
 
                 for year_chunk in yearly_chunks:
                     chunk_start = year_chunk[0][0]
@@ -251,44 +224,27 @@ def pre_save_quality_checks(
                         f"({len(year_chunk)} months)"
                     )
 
-                    if p_date_col:
-                        chunk_df = LayerUtils._apply_date_filter(
-                            validation_df,
-                            p_date_col,
-                            chunk_start,
-                            chunk_end,
-                            table_name,
-                        ).persist(StorageLevel.MEMORY_AND_DISK)
-                    else:
-                        chunk_df = validation_df.persist(StorageLevel.MEMORY_AND_DISK)
+                    chunk_df = LayerUtils._apply_date_filter(
+                        validation_df,
+                        p_date_col,
+                        chunk_start,
+                        chunk_end,
+                        table_name,
+                    ).persist(StorageLevel.MEMORY_AND_DISK)
 
+                    batch_results = []
                     try:
-                        for month_start, month_end in year_chunk:
-                            month_df = (
-                                LayerUtils._apply_date_filter(
-                                    chunk_df,
-                                    p_date_col,
-                                    month_start,
-                                    month_end,
-                                    table_name,
-                                )
-                                if p_date_col
-                                else chunk_df
+                        batch_results, chunk_stops = (
+                            LayerUtils._validate_df_over_months(
+                                chunk_df,
+                                table_name,
+                                config,
+                                _pre_save_validate,
+                                p_date_col,
+                                year_chunk,
                             )
-
-                            results_df, summary = engine.validate(
-                                month_df, table_name, config, p_layer=p_data_subfolder
-                            )
-
-                            if results_df is not None and not df_is_empty(results_df):
-                                results_df = LayerUtils._add_observation_dates(
-                                    results_df, month_start, month_end
-                                )
-                                batch_results.append(results_df)
-
-                            if summary.get("decision") == "STOP":
-                                summary["month"] = month_end
-                                stop_summaries.append(summary)
+                        )
+                        stop_summaries.extend(chunk_stops)
 
                         if batch_results:
                             consolidated_batch = LayerUtils.consolidate_results(
@@ -311,16 +267,17 @@ def pre_save_quality_checks(
                                 pass
                         batch_results.clear()
 
-            finally:
-                pass
-
-            _process_validation_results(
-                [],
-                stop_summaries,
-                table_name,
-                month_ranges,
-                p_data_subfolder,
-            )
+            if stop_summaries:
+                total_critical = sum(
+                    s.get("critical_failures", 0) for s in stop_summaries
+                )
+                failed_months = [s.get("month", "unknown") for s in stop_summaries]
+                raise RuntimeError(
+                    f"Data persistence blocked: pre-save sanity check failed for "
+                    f"'{table_name}' — {total_critical} CRITICAL failure(s) in "
+                    f"months: {', '.join(failed_months)}. Staged data will be "
+                    f"discarded."
+                )
 
             logger.info(
                 f"[PRE-SAVE SC] Validation PASSED for '{table_name}' "
@@ -383,15 +340,7 @@ def check_quality_gate_task(
     except RuntimeError:
         raise
     except Exception as e:
-        error_msg = str(e).lower()
-        if any(
-            phrase in error_msg
-            for phrase in [
-                "table_or_view_not_found",
-                "does not exist",
-                "cannot be found",
-            ]
-        ):
+        if LayerUtils._is_missing_table_error(str(e)):
             _logger.info(
                 f"[TABLE NOT FOUND] Quality gate table not yet created for {p_layer}. "
                 f"Allowing {p_dataset_name} to proceed."
@@ -461,24 +410,26 @@ def validation_results(
         "sanity_check_executed": "1",
     }
 
-    original_env = {k: os.getenv(k) for k in env_overrides.keys()}
-    os.environ.update(env_overrides)
+    with _ENV_MUTATION_LOCK:
+        original_env = {k: os.getenv(k) for k in env_overrides.keys()}
+        os.environ.update(env_overrides)
 
-    try:
-        from data_engineering.core.save_data_flow import save_data_flow
+        try:
+            from data_engineering.core.save_data_flow import save_data_flow
 
-        save_data_flow(df_results, p_mode="MERGE_BY_DATASET")
-    except Exception as e:
-        logger.error(
-            f"❌ Failed to persist validation results for {layer}: {e}", exc_info=True
-        )
-        raise
-    finally:
-        for k, v in original_env.items():
-            if v is not None:
-                os.environ[k] = v
-            else:
-                os.environ.pop(k, None)
+            save_data_flow(df_results, p_mode="MERGE_BY_DATASET")
+        except Exception as e:
+            logger.error(
+                f"❌ Failed to persist validation results for {layer}: {e}",
+                exc_info=True,
+            )
+            raise
+        finally:
+            for k, v in original_env.items():
+                if v is not None:
+                    os.environ[k] = v
+                else:
+                    os.environ.pop(k, None)
 
 
 def _load_and_parse_io_config(
@@ -804,16 +755,28 @@ def create_sanity_check_flow(
             # 2. Load and filter configuration
             config_all = _load_config(p_domain_filter_override=context.domain)
             if not config_all:
+                logger.warning(
+                    f"[{layer_name}] No sanity check config found "
+                    f"(domain={context.domain}). Nothing to validate or persist."
+                )
                 return
 
             configured_datasets = _get_filtered_datasets(config_all, context)
             if not configured_datasets:
+                logger.warning(
+                    f"[{layer_name}] No datasets matched after filtering "
+                    f"(node={os.getenv('node')}). Nothing to validate or persist."
+                )
                 return
 
             # 3. Resolve metadata
             datasets_metadata = _get_datasets_metadata(configured_datasets)
 
             if not datasets_metadata:
+                logger.warning(
+                    f"[{layer_name}] No dataset metadata resolved for "
+                    f"{configured_datasets}. Nothing to validate or persist."
+                )
                 return
 
             # 4. Validate all datasets
