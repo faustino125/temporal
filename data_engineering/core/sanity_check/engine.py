@@ -944,16 +944,13 @@ class LayerUtils:
 
         if is_parquet:
             env = EnvironmentConfig.get_environment()
-            settings = None
+            settings = load_yaml_file(
+                os.path.join(base_dir, "env", "base", "global_settings.yml")
+            )
             if env:
                 env_path = os.path.join(base_dir, "env", env, "global_settings.yml")
                 if os.path.exists(env_path):
-                    settings = load_yaml_file(env_path)
-
-            if not settings:
-                settings = load_yaml_file(
-                    os.path.join(base_dir, "env", "base", "global_settings.yml")
-                )
+                    settings = {**settings, **load_yaml_file(env_path)}
 
             base_path = settings.get("raw_data_path", "")
             for entry in inputs.values():
